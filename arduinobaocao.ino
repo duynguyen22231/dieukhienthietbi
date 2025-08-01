@@ -81,6 +81,7 @@ void checkSchedules();
 void loadSchedules();
 void getGardenId();
 String getCurrentDate();
+int readRainSensor(); // Thêm khai báo hàm mới
 
 void setup() {
   Serial.begin(115200);
@@ -175,6 +176,18 @@ void loop() {
     lastScheduleCheck = currentMillis;
     checkSchedules();
   }
+}
+
+int readRainSensor() {
+  const int NUM_READINGS = 10;
+  long sum = 0;
+  for (int i = 0; i < NUM_READINGS; i++) {
+    sum += analogRead(RAIN_SENSOR_PIN);
+    delay(10);
+  }
+  int rain = sum / NUM_READINGS;
+  if (rain < 0 || rain > 4095) rain = 4095;
+  return rain;
 }
 
 void connectToWiFi() {
@@ -419,7 +432,7 @@ void loadSchedules() {
                 break;
               }
             }
-            if (garden_number == 0) continue; // Bỏ qua nếu không tìm thấy garden_number
+            if (garden_number == 0) continue;
 
             int hour, minute, second;
             sscanf(start_time.c_str(), "%d:%d:%d", &hour, &minute, &second);
@@ -476,7 +489,6 @@ void checkSchedules() {
           if (devices[j] == schedules[i].device_name &&
               ((schedules[i].garden_number == 1 && (devices[j] == "den1" || devices[j] == "quat1")) ||
                (schedules[i].garden_number == 2 && (devices[j] == "den2" || devices[j] == "quat2")))) {
-            // Đặt lại manualOverride khi lịch trình được thực thi
             manualOverride[j] = false;
             deviceStatuses[j] = schedules[i].action;
             digitalWrite(devicePins[j], schedules[i].action == 1 ? LOW : HIGH);
@@ -494,7 +506,6 @@ void checkSchedules() {
         }
       } else if (currentSeconds > scheduleEnd) {
         schedules[i].executed = true;
-        // Đặt lại manualOverride sau khi lịch trình kết thúc
         for (int j = 0; j < 8; j++) {
           if (devices[j] == schedules[i].device_name &&
               ((schedules[i].garden_number == 1 && (devices[j] == "den1" || devices[j] == "quat1")) ||
@@ -517,14 +528,13 @@ void autoControlDevices() {
   if (soil2 < 0 || soil2 > 4095) soil2 = 4095;
   float soil1_percent = map(soil1, 4095, 0, 0, 100);
   float soil2_percent = map(soil2, 4095, 0, 0, 100);
-  int rain = analogRead(RAIN_SENSOR_PIN);
-  if (rain < 0 || rain > 4095) rain = 4095;
+  int rain = readRainSensor();
   float waterLevel = readWaterLevel();
   unsigned long currentMillis = millis();
 
   Serial.println("Vườn 1: raw=" + String(soil1) + ", độ ẩm=" + String(soil1_percent, 1) + "%");
   Serial.println("Vườn 2: raw=" + String(soil2) + ", độ ẩm=" + String(soil2_percent, 1) + "%");
-  Serial.println("Mưa: raw=" + String(rain) + ", trạng thái=" + String(rain < 500 ? "Đang mưa" : "Không mưa"));
+  Serial.println("Mưa: raw=" + String(rain) + ", trạng thái=" + String(rain < 2000 ? "Đang mưa" : "Không mưa"));
   Serial.println("Mực nước: waterLevel=" + String(waterLevel, 1) + " cm");
 
   bool deviceInSchedule[8] = {false};
@@ -548,7 +558,7 @@ void autoControlDevices() {
     float temp = (garden_number == 1) ? dht1.readTemperature() : dht2.readTemperature();
     Serial.println("Nhiệt độ vườn " + String(garden_number) + ": " + String(isnan(temp) ? "N/A" : String(temp, 1)) + "°C");
 
-    int lampIndex = (garden_number == 1) ? 3 : 5; // den1 (index 3) hoặc den2 (index 5)
+    int lampIndex = (garden_number == 1) ? 3 : 5;
     if (!deviceInSchedule[lampIndex] && !manualOverride[lampIndex]) {
       if (!isnan(temp) && temp < 25 && !lampOnByTemp && deviceStatuses[lampIndex] == 0) {
         deviceStatuses[lampIndex] = 1;
@@ -572,7 +582,7 @@ void autoControlDevices() {
 
     if (!deviceInSchedule[0] && !deviceInSchedule[1] && !deviceInSchedule[2] && !deviceInSchedule[7] &&
         !manualOverride[0] && !manualOverride[1] && !manualOverride[2] && !manualOverride[7]) {
-      if (rain < 500) {
+      if (rain < 2000) {
         deviceStatuses[0] = 0;
         deviceStatuses[1] = 0;
         deviceStatuses[2] = 0;
@@ -625,7 +635,7 @@ void sendSensorData() {
   float hum2 = dht2.readHumidity();
   int soil1 = analogRead(SOIL_MOISTURE1_PIN);
   int soil2 = analogRead(SOIL_MOISTURE2_PIN);
-  int rain = analogRead(RAIN_SENSOR_PIN);
+  int rain = readRainSensor();
   float waterLevel = readWaterLevel();
 
   if (soil1 < 0 || soil1 > 4095) {
@@ -636,16 +646,15 @@ void sendSensorData() {
     Serial.println("Cảnh báo: soil2 bất thường, gán soil2=4095");
     soil2 = 4095;
   }
-  if (rain < 0 || rain > 4095) rain = 4095;
+  if (rain < 0 || rain > 4095) {
+    Serial.println("Cảnh báo: rain bất thường, gán rain=4095");
+    rain = 4095;
+  }
   float soil1_percent = map(soil1, 4095, 0, 0, 100);
   float soil2_percent = map(soil2, 4095, 0, 0, 100);
   Serial.println("Raw soil1: " + String(soil1) + ", Soil1_percent: " + String(soil1_percent, 1) + "%");
   Serial.println("Raw soil2: " + String(soil2) + ", Soil2_percent: " + String(soil2_percent, 1) + "%");
-  Serial.println("Temperature1: " + String(isnan(temp1) ? "N/A" : String(temp1, 1)) + "°C");
-  Serial.println("Humidity1: " + String(isnan(hum1) ? "N/A" : String(hum1, 1)) + "%");
-  Serial.println("Temperature2: " + String(isnan(temp2) ? "N/A" : String(temp2, 1)) + "°C");
-  Serial.println("Humidity2: " + String(isnan(hum2) ? "N/A" : String(hum2, 1)) + "%");
-  Serial.println("Rain: " + String(rain) + ", Is raining: " + String(rain < 500 ? "Yes" : "No"));
+  Serial.println("Rain: " + String(rain) + ", Is raining: " + String(rain < 2000 ? "Yes" : "No"));
   Serial.println("Water level: " + String(waterLevel, 1) + " cm");
 
   HTTPClient http;
@@ -662,7 +671,7 @@ void sendSensorData() {
     doc["temperature"] = (garden_number == 1) ? (isnan(temp1) ? 0 : temp1) : (isnan(temp2) ? 0 : temp2);
     doc["humidity"] = (garden_number == 1) ? (isnan(hum1) ? 0 : hum1) : (isnan(hum2) ? 0 : hum2);
     doc["water_level_cm"] = waterLevel;
-    doc["is_raining"] = rain < 500 ? 1 : 0;
+    doc["is_raining"] = rain < 2000 ? 1 : 0;
 
     String requestBody;
     serializeJson(doc, requestBody);
@@ -731,7 +740,6 @@ void checkControlCommand() {
             int status = command["status"].as<int>();
             bool isScheduled = false;
 
-            // Kiểm tra xem thiết bị có đang trong lịch trình
             for (int j = 0; j < scheduleCount; j++) {
               if (!schedules[j].executed && schedules[j].date == currentDate &&
                   schedules[j].device_name == deviceName &&
